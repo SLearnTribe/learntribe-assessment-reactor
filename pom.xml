@@ -9,7 +9,7 @@
 
 	<groupId>com.smilebat.learntribe</groupId>
 	<artifactId>learntribe-assessment-reactor</artifactId>
-	<version>1.0.1</version>
+	<version>1.0.2-SNAPSHOT</version>
 	<packaging>jar</packaging>
 	<name>learntribe-assessment-reactor</name>
 	<description>Initial</description>
@@ -24,7 +24,7 @@
 	<scm>
 		<developerConnection>scm:git:https://github.com/SLearnTribe/learntribe-assessment-reactor.git</developerConnection>
 		<connection>https://github.com/SLearnTribe/learntribe-assessment-reactor</connection>
-		<tag>learntribe-assessment-reactor-1.0.1</tag>
+		<tag>HEAD</tag>
 	</scm>
 	<dependencyManagement>
 		<dependencies>
