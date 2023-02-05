@@ -52,7 +52,7 @@ public class KafkaConsumer {
       groupId = groupId,
       topics = inTopicInq,
       containerFactory = KAFKA_LISTENER_CONTAINER_FACTORY,
-  autoStartup = "${kafka.startup}")
+      autoStartup = "${kafka.startup}")
   public void receiveFromInqusitve(String message) throws JsonProcessingException {
     final UserProfileRequest profile = mapper.readValue(message, UserProfileRequest.class);
     log.info("Json message received using Kafka listener {}", profile);
@@ -73,7 +73,7 @@ public class KafkaConsumer {
       groupId = groupId,
       topics = inTopicOai,
       containerFactory = KAFKA_LISTENER_CONTAINER_FACTORY,
-          autoStartup = "${kafka.startup}")
+      autoStartup = "${kafka.startup}")
   public void receiveFromOpenAiProcessor(String message) throws JsonProcessingException {
     final KafkaSkillsRequest request = mapper.readValue(message, KafkaSkillsRequest.class);
     log.info("Json message received using Kafka listener {}", request);

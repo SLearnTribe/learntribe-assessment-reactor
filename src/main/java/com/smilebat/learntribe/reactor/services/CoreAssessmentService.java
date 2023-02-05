@@ -1,9 +1,7 @@
 package com.smilebat.learntribe.reactor.services;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Verify;
-import com.smilebat.learntribe.assessment.AssessmentRequest;
 import com.smilebat.learntribe.dataaccess.AssessmentRepository;
 import com.smilebat.learntribe.dataaccess.AstChallengeReltnRepository;
 import com.smilebat.learntribe.dataaccess.ChallengeRepository;
@@ -30,8 +28,6 @@ import javax.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-import org.checkerframework.checker.units.qual.A;
-import org.checkerframework.checker.units.qual.K;
 import org.springframework.stereotype.Component;
 
 /**
@@ -96,7 +92,7 @@ public class CoreAssessmentService {
   }
 
   private void createFreshUserAssessments(String candidateId, Set<String> userSkills) {
-    log.info("Creating Default User Assessments for the skills {}",userSkills.toString());
+    log.info("Creating Default User Assessments for the skills {}", userSkills);
     final List<Assessment> defaultAssessments = getDefaultAssessments(userSkills);
     evaluateChallenges(candidateId, defaultAssessments);
   }

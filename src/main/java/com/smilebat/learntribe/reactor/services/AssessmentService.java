@@ -355,7 +355,7 @@ public class AssessmentService {
         challengeRepository.findBySkill(skill.toUpperCase().trim(), difficulty.name());
 
     if (challenges.isEmpty()) {
-      log.info("Requesting Challenge Store for : {}",skill);
+      log.info("Requesting Challenge Store for : {}", skill);
       KafkaSkillsRequest kafkaSkillsRequest = new KafkaSkillsRequest();
       kafkaSkillsRequest.setSkills(Set.of(skill));
       kafkaSkillsRequest.setAssessmentRequest(request);
@@ -415,7 +415,7 @@ public class AssessmentService {
             .map(candidateId -> createUserObReltn(candidateId, jobId))
             .collect(Collectors.toList());
     if (!userObReltns.isEmpty()) {
-    userObReltnRepository.saveAll(userObReltns);
+      userObReltnRepository.saveAll(userObReltns);
     }
   }
 
