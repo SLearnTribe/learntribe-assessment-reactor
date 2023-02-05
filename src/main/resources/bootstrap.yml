@@ -1,6 +1,6 @@
 spring:
   application:
-    name: assessment
+    name: sb-ast
   cloud:
     consul:
       host: host.docker.internal
