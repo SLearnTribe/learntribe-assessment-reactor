@@ -78,7 +78,7 @@ public class AssessmentController {
         @ApiResponse(code = 404, message = URL_NOT_FOUND),
         @ApiResponse(code = 422, message = INVALID_DATA),
       })
-  public ResponseEntity<?> retrieveRecommendedAssessments(
+  public ResponseEntity<?> retrieveAssessments(
       @AuthenticationPrincipal(expression = SUBJECT) String keyCloakId,
       @RequestParam(value = "page") int pageNo,
       @RequestParam(value = "limit") int pageSize,

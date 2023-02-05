@@ -1,19 +1,23 @@
 package com.smilebat.learntribe.reactor.services;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Verify;
+import com.smilebat.learntribe.assessment.AssessmentRequest;
 import com.smilebat.learntribe.dataaccess.AssessmentRepository;
+import com.smilebat.learntribe.dataaccess.AstChallengeReltnRepository;
 import com.smilebat.learntribe.dataaccess.ChallengeRepository;
 import com.smilebat.learntribe.dataaccess.UserAstReltnRepository;
 import com.smilebat.learntribe.dataaccess.jpa.entity.Assessment;
+import com.smilebat.learntribe.dataaccess.jpa.entity.AstChallengeReltn;
 import com.smilebat.learntribe.dataaccess.jpa.entity.Challenge;
 import com.smilebat.learntribe.dataaccess.jpa.entity.UserAstReltn;
 import com.smilebat.learntribe.enums.AssessmentDifficulty;
 import com.smilebat.learntribe.inquisitve.UserProfileRequest;
-import com.smilebat.learntribe.learntribeclients.openai.OpenAiService;
-import com.smilebat.learntribe.openai.OpenAiRequest;
-import com.smilebat.learntribe.openai.response.Choice;
-import com.smilebat.learntribe.openai.response.OpenAiResponse;
+import com.smilebat.learntribe.kafka.KafkaSkillsRequest;
+import com.smilebat.learntribe.reactor.kafka.KafkaProducer;
 import com.smilebat.learntribe.reactor.services.helpers.AssessmentHelper;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
@@ -24,8 +28,10 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import javax.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
+import org.checkerframework.checker.units.qual.A;
+import org.checkerframework.checker.units.qual.K;
 import org.springframework.stereotype.Component;
 
 /**
@@ -44,18 +50,16 @@ public class CoreAssessmentService {
 
   private final ChallengeRepository challengeRepository;
 
-  private final UserAstReltnRepository userAstReltnRepository;
+  private final AstChallengeReltnRepository astChallengeReltnRepository;
 
-  private final OpenAiService openAiService;
+  private final UserAstReltnRepository userAstReltnRepository;
 
   private final AssessmentHelper helper;
 
-  private final ChallengeParser challengeParser;
+  /*Kafka Messaging*/
+  private final KafkaProducer kafka;
 
-  @Value("${feature.openai}")
-  private boolean isOpenAiEnabled;
-
-  private static final int MAX_QUESTIONS = 15;
+  private final ObjectMapper mapper;
 
   /**
    * Evaluates and Creates new User Assessments.
@@ -70,6 +74,7 @@ public class CoreAssessmentService {
     log.info("Evaluating Assessments for User {}", candidateId);
     final List<UserAstReltn> userAstReltns = userAstReltnRepository.findByUserId(candidateId);
     Set<String> userSkills = evaluateUserSkills(profile, userAstReltns);
+    /*Validate if user added new skill*/
     if (!userSkills.isEmpty()) {
       createFreshUserAssessments(candidateId, userSkills);
     }
@@ -91,7 +96,7 @@ public class CoreAssessmentService {
   }
 
   private void createFreshUserAssessments(String candidateId, Set<String> userSkills) {
-    log.info("Creating Fresh User Assessments");
+    log.info("Creating Default User Assessments for the skills {}",userSkills.toString());
     final List<Assessment> defaultAssessments = getDefaultAssessments(userSkills);
     evaluateChallenges(candidateId, defaultAssessments);
   }
@@ -105,20 +110,44 @@ public class CoreAssessmentService {
         .collect(Collectors.toList());
   }
 
+  @SneakyThrows
   private void evaluateChallenges(String candidateId, List<Assessment> defaultAssessments) {
+    Set<String> skills = new HashSet<>();
+
     for (Assessment assessment : defaultAssessments) {
       log.info("Creating fresh assessment for User {}", candidateId);
-      Set<Challenge> freshChallenges = createFreshChallenges(assessment);
-      if (!freshChallenges.isEmpty()) {
-        assessment.setChallenges(freshChallenges);
+      final String skill = assessment.getTitle();
+      final AssessmentDifficulty difficulty = assessment.getDifficulty();
+      Set<Challenge> freshChallenges = challengeRepository.findBySkill(skill, difficulty.name());
+      if (!freshChallenges.isEmpty() && freshChallenges.size() > 10) {
         assessment.setQuestions(freshChallenges.size());
         assessmentRepository.save(assessment);
-        challengeRepository.saveAll(freshChallenges);
+        createAssessmentChallengeReltn(assessment, freshChallenges);
         Long assessmentId = assessment.getId();
         createUserAssessmentRelation("SYSTEM", List.of(candidateId), assessmentId);
         log.info("Successfuly create assessment {} for User {}", assessmentId, candidateId);
+      } else {
+        skills.add(skill);
       }
     }
+    if (!skills.isEmpty()) {
+      KafkaSkillsRequest kafkaRequest = new KafkaSkillsRequest();
+      kafkaRequest.setSkills(skills);
+      kafka.sendMessage(mapper.writeValueAsString(kafkaRequest));
+    }
+  }
+
+  @Transactional
+  private void createAssessmentChallengeReltn(
+      Assessment assessment, Set<Challenge> freshChallenges) {
+    List<AstChallengeReltn> astChallengeReltnList = new ArrayList<>(freshChallenges.size());
+    for (Challenge challenge : freshChallenges) {
+      AstChallengeReltn astChallengeReltn = new AstChallengeReltn();
+      astChallengeReltn.setAssessmentId(assessment.getId());
+      astChallengeReltn.setChallengeId(challenge.getId());
+      astChallengeReltnList.add(astChallengeReltn);
+    }
+    astChallengeReltnRepository.saveAll(astChallengeReltnList);
   }
 
   private Set<String> evaluateUserSkills(
@@ -136,105 +165,6 @@ public class CoreAssessmentService {
       return Collections.emptySet();
     }
     return hasUserAssessments ? updatedUserSkills : userSkills;
-  }
-
-  /**
-   * Creates Fresh MCQ's for the new assessments.
-   *
-   * @param assessment the {@link Assessment}.
-   * @return Set of {@link Challenge}.
-   */
-  @Transactional
-  public Set<Challenge> createFreshChallenges(Assessment assessment) {
-    final String skill = assessment.getTitle();
-    final AssessmentDifficulty difficulty = assessment.getDifficulty();
-
-    Set<Challenge> challenges =
-        isOpenAiEnabled ? getOpenAiCompletions(skill, difficulty) : Collections.emptySet();
-
-    int totalQAGenerated = challenges.size();
-
-    int remainingQARequired =
-        totalQAGenerated > MAX_QUESTIONS
-            ? totalQAGenerated - MAX_QUESTIONS
-            : MAX_QUESTIONS - totalQAGenerated;
-
-    Set<Challenge> preExisitngDbChallenges =
-        challengeRepository.findBySkill(skill, remainingQARequired, 0);
-    if (!preExisitngDbChallenges.isEmpty()) {
-      challenges.addAll(preExisitngDbChallenges);
-    }
-
-    if (!challenges.isEmpty()) {
-      for (Challenge challenge : challenges) {
-        challenge.setSkill(skill);
-        challenge.setAssessmentInfo(assessment);
-      }
-    }
-    return challenges;
-  }
-
-  private Set<Challenge> getOpenAiCompletions(String skill, AssessmentDifficulty difficulty) {
-    String prompt =
-        "Create 5 "
-            + difficulty.getString()
-            + " "
-            + skill
-            + " questions with options and correct answers";
-    OpenAiRequest request = new OpenAiRequest();
-    request.setPrompt(prompt);
-    final OpenAiResponse completions = openAiService.getCompletions(request);
-    final List<Choice> choices = completions.getChoices();
-    if (choices == null || choices.isEmpty()) {
-      log.info("Unable to create open ai completion text");
-      throw new IllegalArgumentException();
-    }
-    Choice choice = choices.get(0);
-    String completedText = choice.getText();
-    //     String completedText = "\n\n1. What is the name of the software development environment
-    // in" +
-    //     "which Java is primarily used?\n\nA. Eclipse\nB. NetBeans\nC. IntelliJ IDEA\nD. Android"
-    // +
-    //     "Studio\n\nAnswer: C. IntelliJ IDEA\n\n2. What is the file extension for Java source" +
-    //     "files?\n\nA. .java\nB. .class\nC. .jar\nD. .exe\n\nAnswer: A. .java\n\n3. Which of the"+
-    //     "following is not a Java primitive type?\n\nA. int\nB. float\nC. String\nD.
-    // char\n\nAnswer: C."+
-    //     "String\n\n4. Which of the following is not a keyword in Java?\n\nA. public\nB.
-    // static\nC."+
-    //     "void\nD. native\n\nAnswer: D. native\n\n5. What is the output of the following"+
-    //     "code?\n\npublic class Test {\n   public static void main(String[] args) {\n"+
-    //     "System.out.println(\"Hello, world!\");\n   }\n}\n\nA. Hello, world!\nB. 0\nC. Hello,"+
-    //             "world\nD. compilation error\n\nAnswer: A. Hello, world!";
-    return challengeParser.parseText(completedText);
-  }
-
-  /**
-   * Parses the text completion for query extractions.
-   *
-   * @param str the completed open ai text.
-   * @param assessment the {@link Assessment} entity.
-   * @return the Set of {@link Challenge}.
-   */
-  @Deprecated
-  private Set<Challenge> parseCompletedText(String str, Assessment assessment) {
-    String[] arr = str.split("\n\n");
-    Set<Challenge> challenges = new HashSet<>(15);
-    int index = 1;
-    int arrLen = arr.length;
-    try {
-
-      while (index < arrLen) {
-        Challenge challenge = new Challenge();
-        challenge.setQuestion(arr[index++].substring(3));
-        challenge.setOptions(arr[index++].split("\n"));
-        challenge.setAnswer(arr[index++]);
-        challenge.setAssessmentInfo(assessment);
-        challenges.add(challenge);
-      }
-    } catch (IndexOutOfBoundsException exception) {
-      log.info("Error Parsing Open AI response");
-    }
-    return challenges;
   }
 
   /**

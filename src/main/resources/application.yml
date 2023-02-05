@@ -1,9 +1,7 @@
 
 server:
-  port: 8090
+  port: 0
 spring:
-  application:
-    name: learntribe-assessment-reactor
   datasource:
     url: jdbc:postgresql://${domain}:5432/inquisitve
     password: password
@@ -27,12 +25,12 @@ spring:
         jwt:
           issuer-uri: ${feign.client.url.keycloak}/realms/master
 
-eureka:
-  instance:
-    instance-id: ${spring.application.name}:${random.uuid}
-  client:
-    serviceUrl:
-      defaultZone: http://${domain}:8761/eureka
+#eureka:
+#  instance:
+#    instance-id: ${spring.application.name}:${random.uuid}
+#  client:
+#    serviceUrl:
+#      defaultZone: http://${domain}:8761/eureka
 
 feign:
   client:
@@ -53,7 +51,14 @@ logging:
 
 domain: host.docker.internal
 
-feature:
-  openai: true
-
+kafka:
+  startup: true
+  server:
+    url: localhost:29092
+  groupid: sb-group-1
+  topic:
+    out: challenge-store-event-1
+    in:
+      inq: assessment-topic-1
+      oai: challenge-store-event-2
 

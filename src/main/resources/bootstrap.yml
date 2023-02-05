@@ -1,0 +1,15 @@
+spring:
+  application:
+    name: assessment
+  cloud:
+    consul:
+      host: host.docker.internal
+      port: 8500
+      discovery:
+        healthCheckPath: /actuator/health
+        healthCheckInterval: 30s
+        instanceId: ${spring.application.name}:${random.value}
+        queryPassing: true
+    config:
+      enabled: true
+      failFast: false
