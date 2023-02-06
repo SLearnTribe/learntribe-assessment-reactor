@@ -33,10 +33,10 @@ import org.springframework.kafka.support.serializer.JsonSerializer;
 public class KafkaConfig {
 
   @Value("${kafka.server.url}")
-  private final String kafkaLocalServerConfig = "localhost:29092";
+  private String kafkaLocalServerConfig;
 
   @Value("${kafka.groupid}")
-  private final String groupIdConfig = "sb-group-1";
+  private String groupIdConfig;
 
   /**
    * Bean for producer factory.
