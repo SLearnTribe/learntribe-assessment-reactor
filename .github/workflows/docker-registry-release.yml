@@ -36,7 +36,9 @@ jobs:
     - name: Prepare release
       env:
         GITHUB_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }}
-      run: mvn -B release:prepare --settings foo/settings.xml -DignoreSnapshots=true -Dusername=$GITHUB_ACTOR -Dpassword=$GITHUB_TOKEN -Darguments=" -Dmaven.javadoc.skip=true -P docker-deploy"
+      run: |
+      mvn -B --file pom.xml --settings foo/settings.xml clean install -Pskip_static
+      mvn -B release:prepare --settings foo/settings.xml -DignoreSnapshots=true -Dusername=$GITHUB_ACTOR -Dpassword=$GITHUB_TOKEN -Darguments=" -Dmaven.javadoc.skip=true -P docker-deploy"
     - name: Perform release
       env:
         DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
