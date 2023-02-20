@@ -233,7 +233,6 @@ public class AssessmentService {
     }
   }
 
-
   private List<UserAstReltn> getUserAssessmentRelations(
       String keyword, String keyCloakId, Pageable paging, String[] filters)
       throws InterruptedException {
