@@ -36,7 +36,6 @@ public class KafkaProducer {
   public void sendMessage(String message) {
     try {
       if (startup) {
-
         kafkaTemplate.send(outTopic, message);
       }
     } catch (Exception e) {

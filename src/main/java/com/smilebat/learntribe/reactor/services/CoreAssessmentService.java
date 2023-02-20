@@ -6,16 +6,16 @@ import com.smilebat.learntribe.dataaccess.AssessmentRepository;
 import com.smilebat.learntribe.dataaccess.AstChallengeReltnRepository;
 import com.smilebat.learntribe.dataaccess.ChallengeRepository;
 import com.smilebat.learntribe.dataaccess.UserAstReltnRepository;
+import com.smilebat.learntribe.dataaccess.WorkQueueRepository;
 import com.smilebat.learntribe.dataaccess.jpa.entity.Assessment;
-import com.smilebat.learntribe.dataaccess.jpa.entity.AstChallengeReltn;
 import com.smilebat.learntribe.dataaccess.jpa.entity.Challenge;
 import com.smilebat.learntribe.dataaccess.jpa.entity.UserAstReltn;
+import com.smilebat.learntribe.dataaccess.jpa.entity.WorkQueue;
 import com.smilebat.learntribe.enums.AssessmentDifficulty;
 import com.smilebat.learntribe.inquisitve.UserProfileRequest;
 import com.smilebat.learntribe.kafka.KafkaSkillsRequest;
 import com.smilebat.learntribe.reactor.kafka.KafkaProducer;
 import com.smilebat.learntribe.reactor.services.helpers.AssessmentHelper;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
@@ -28,6 +28,7 @@ import javax.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
+import org.jetbrains.annotations.NotNull;
 import org.springframework.stereotype.Component;
 
 /**
@@ -51,6 +52,8 @@ public class CoreAssessmentService {
   private final UserAstReltnRepository userAstReltnRepository;
 
   private final AssessmentHelper helper;
+
+  private final WorkQueueRepository workQueueRepository;
 
   /*Kafka Messaging*/
   private final KafkaProducer kafka;
@@ -118,32 +121,38 @@ public class CoreAssessmentService {
       if (!freshChallenges.isEmpty() && freshChallenges.size() > 10) {
         assessment.setQuestions(freshChallenges.size());
         assessmentRepository.save(assessment);
-        createAssessmentChallengeReltn(assessment, freshChallenges);
+        astChallengeReltnRepository.saveAll(
+            helper.createAstChallengeReltns(assessment, freshChallenges));
         Long assessmentId = assessment.getId();
         createUserAssessmentRelation("SYSTEM", List.of(candidateId), assessmentId);
-        log.info("Successfuly create assessment {} for User {}", assessmentId, candidateId);
+        log.info("Successfuly created assessment {} for User {}", assessmentId, candidateId);
       } else {
         skills.add(skill);
       }
     }
     if (!skills.isEmpty()) {
-      KafkaSkillsRequest kafkaRequest = new KafkaSkillsRequest();
-      kafkaRequest.setSkills(skills);
+      WorkQueue workQueue = workQueueRepository.findBySystemCreated(candidateId);
+      if (workQueue != null) {
+        String queueSkills = workQueue.getSkills();
+        String newSkills =
+            skills.stream().filter(s -> !queueSkills.contains(s)).collect(Collectors.joining(","));
+        if (!newSkills.isEmpty()) {
+          workQueue.setSkills(String.join(",", newSkills, queueSkills));
+        }
+      } else {
+        workQueue = helper.getSystemWorkQueue(candidateId, skills);
+      }
+      workQueueRepository.save(workQueue);
+      KafkaSkillsRequest kafkaRequest = getKafkaSkillsRequest(skills);
       kafka.sendMessage(mapper.writeValueAsString(kafkaRequest));
     }
   }
 
-  @Transactional
-  private void createAssessmentChallengeReltn(
-      Assessment assessment, Set<Challenge> freshChallenges) {
-    List<AstChallengeReltn> astChallengeReltnList = new ArrayList<>(freshChallenges.size());
-    for (Challenge challenge : freshChallenges) {
-      AstChallengeReltn astChallengeReltn = new AstChallengeReltn();
-      astChallengeReltn.setAssessmentId(assessment.getId());
-      astChallengeReltn.setChallengeId(challenge.getId());
-      astChallengeReltnList.add(astChallengeReltn);
-    }
-    astChallengeReltnRepository.saveAll(astChallengeReltnList);
+  @NotNull
+  private KafkaSkillsRequest getKafkaSkillsRequest(Set<String> skills) {
+    KafkaSkillsRequest kafkaRequest = new KafkaSkillsRequest();
+    kafkaRequest.setSkills(skills);
+    return kafkaRequest;
   }
 
   private Set<String> evaluateUserSkills(

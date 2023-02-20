@@ -2,6 +2,7 @@ package com.smilebat.learntribe.reactor.converters;
 
 import com.smilebat.learntribe.assessment.response.ChallengeResponse;
 import com.smilebat.learntribe.dataaccess.jpa.entity.Challenge;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -25,7 +26,14 @@ public final class ChallengeConverter {
     ChallengeResponse challengeResponse = new ChallengeResponse();
     challengeResponse.setId(challenge.getId());
     challengeResponse.setQuestion(challenge.getQuestion());
-    challengeResponse.setOptions(challenge.getOptions());
+    String[] options = challenge.getOptions();
+    List<String> responseOptions = new ArrayList<>(options.length);
+    for (String option : options) {
+      if (option != null && !option.isEmpty()) {
+        responseOptions.add(option);
+      }
+    }
+    challengeResponse.setOptions(responseOptions);
     return challengeResponse;
   }
 

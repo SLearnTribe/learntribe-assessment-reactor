@@ -1,6 +1,5 @@
 package com.smilebat.learntribe.reactor.services;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Verify;
 import com.google.common.collect.ImmutableList;
@@ -13,23 +12,26 @@ import com.smilebat.learntribe.dataaccess.AssessmentRepository;
 import com.smilebat.learntribe.dataaccess.AssessmentSearchRepository;
 import com.smilebat.learntribe.dataaccess.AstChallengeReltnRepository;
 import com.smilebat.learntribe.dataaccess.ChallengeRepository;
+import com.smilebat.learntribe.dataaccess.OthersBusinessRepository;
 import com.smilebat.learntribe.dataaccess.UserAstReltnRepository;
 import com.smilebat.learntribe.dataaccess.UserObReltnRepository;
 import com.smilebat.learntribe.dataaccess.UserProfileRepository;
+import com.smilebat.learntribe.dataaccess.WorkQueueRepository;
 import com.smilebat.learntribe.dataaccess.jpa.entity.Assessment;
 import com.smilebat.learntribe.dataaccess.jpa.entity.AstChallengeReltn;
 import com.smilebat.learntribe.dataaccess.jpa.entity.Challenge;
+import com.smilebat.learntribe.dataaccess.jpa.entity.OthersBusiness;
 import com.smilebat.learntribe.dataaccess.jpa.entity.UserAstReltn;
 import com.smilebat.learntribe.dataaccess.jpa.entity.UserObReltn;
 import com.smilebat.learntribe.dataaccess.jpa.entity.UserProfile;
+import com.smilebat.learntribe.dataaccess.jpa.entity.WorkQueue;
 import com.smilebat.learntribe.enums.AssessmentDifficulty;
 import com.smilebat.learntribe.enums.AssessmentStatus;
 import com.smilebat.learntribe.enums.AssessmentType;
-import com.smilebat.learntribe.enums.HiringStatus;
-import com.smilebat.learntribe.enums.UserObReltnType;
 import com.smilebat.learntribe.inquisitve.JobRequest;
 import com.smilebat.learntribe.inquisitve.response.OthersBusinessResponse;
 import com.smilebat.learntribe.kafka.KafkaSkillsRequest;
+import com.smilebat.learntribe.learntribevalidator.learntribeexceptions.InvalidDataException;
 import com.smilebat.learntribe.reactor.converters.AssessmentConverter;
 import com.smilebat.learntribe.reactor.converters.ChallengeConverter;
 import com.smilebat.learntribe.reactor.kafka.KafkaProducer;
@@ -48,6 +50,7 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -78,6 +81,10 @@ public class AssessmentService {
 
   private final AssessmentSearchRepository assessmentSearchRepository;
 
+  private final WorkQueueRepository workQueueRepository;
+
+  private final OthersBusinessRepository jobRepository;
+
   /*Kafka Messaging*/
   private final KafkaProducer kafka;
 
@@ -107,12 +114,10 @@ public class AssessmentService {
   @Transactional
   public List<AssessmentResponse> getGeneratedAssessments(String keyCloakId) {
     Verify.verifyNotNull(keyCloakId, "User Keycloak Id cannnot be null");
-
     List<UserAstReltn> userAstReltns = userAstReltnRepository.findByUserId(keyCloakId);
     if (userAstReltns == null || userAstReltns.isEmpty()) {
       return Collections.emptyList();
     }
-
     final List<Long> assessmentIds =
         userAstReltns.stream().map(UserAstReltn::getAssessmentId).collect(Collectors.toList());
     final Iterable<Assessment> assessments = assessmentRepository.findAllById(assessmentIds);
@@ -164,6 +169,9 @@ public class AssessmentService {
       PageableAssessmentRequest request, String keyword) throws InterruptedException {
     String keyCloakId = request.getKeyCloakId();
     Verify.verifyNotNull(keyCloakId, "User Keycloak Id cannnot be null");
+    log.info("Validating work queue for {}", keyCloakId);
+    List<WorkQueue> queueItems = workQueueRepository.findByUserId(keyCloakId);
+    queueItems.forEach(this::evaluateQueuedAssessments);
     log.info("Fetching Assessments for User {}", keyCloakId);
     Pageable paging = request.getPaging();
     String[] filters = evaluateAssessmentStatusFilters(request);
@@ -171,9 +179,60 @@ public class AssessmentService {
         getUserAssessmentRelations(keyword, keyCloakId, paging, filters);
     List<Assessment> assessments = fetchExisitingAssessments(userAstReltns);
     List<AssessmentResponse> responses = assessmentConverter.toResponse(assessments);
+    mapBusinessName(responses);
     mapUserAssessmentStatus(userAstReltns, responses);
     return responses;
   }
+
+  private void mapBusinessName(List<AssessmentResponse> responses) {
+    for (AssessmentResponse response : responses) {
+      final long id = response.getRelatedJobId();
+      final Optional<OthersBusiness> byBusiness = jobRepository.findById(id);
+      if (byBusiness.isPresent()) {
+        OthersBusiness business = byBusiness.get();
+        response.setBusinessName(business.getBusinessName());
+      }
+    }
+  }
+
+  private void evaluateQueuedAssessments(WorkQueue queueItem) {
+    String skills = queueItem.getSkills();
+    String candidateId = queueItem.getCreatedFor();
+    if (skills == null || skills.isEmpty()) {
+      log.info("no work item skills found for the user {}", candidateId);
+      return;
+    }
+    String[] parsedSkills = skills.split(",");
+    for (String skill : parsedSkills) {
+      final Optional<Assessment> byUserTitleDifficulty =
+          assessmentRepository.findByUserTitleDifficulty(
+              candidateId, skill, queueItem.getDifficulty().name());
+      if (byUserTitleDifficulty.isPresent()) {
+        log.info("Assessment already present for the user from queue");
+        workQueueRepository.delete(queueItem);
+        return;
+      }
+      final Set<Challenge> challenges =
+          challengeRepository.findBySkill(skill, queueItem.getDifficulty().name());
+      if (challenges.size() > 10) {
+        Assessment assessment = new Assessment();
+        assessment.setDifficulty(queueItem.getDifficulty());
+        assessment.setCreatedBy(queueItem.getCreatedBy());
+        assessment.setStatus(AssessmentStatus.PENDING);
+        assessment.setTitle(skill);
+        assessment.setType(AssessmentType.OBJECTIVE);
+        assessment.setQuestions(challenges.size());
+        assessmentRepository.save(assessment);
+        createAstChallengeReltns(challenges, assessment);
+        final UserAstReltn userAstReltnForCandidate =
+            helper.createUserAstReltnForCandidate(candidateId, assessment);
+        userAstReltnRepository.save(userAstReltnForCandidate);
+        log.info("Successfully created new assessment for the user from work item");
+        workQueueRepository.delete(queueItem);
+      }
+    }
+  }
+
 
   private List<UserAstReltn> getUserAssessmentRelations(
       String keyword, String keyCloakId, Pageable paging, String[] filters)
@@ -246,6 +305,7 @@ public class AssessmentService {
     if (challengeResponses != null && !challengeResponses.isEmpty()) {
       assessmentResponse.setChallengeResponses(challengeResponses);
     }
+    assessmentResponse.setRequiredTimeInSeconds(challenges.size() * 60);
     return assessmentResponse;
   }
 
@@ -265,7 +325,8 @@ public class AssessmentService {
     final Optional<Assessment> byAssessmentId = assessmentRepository.findById(assessmentId);
 
     if (!byAssessmentId.isPresent()) {
-      throw new IllegalArgumentException("Invalid Assessment or Assessment not present");
+      throw new InvalidDataException(
+          "Invalid Assessment or Assessment " + assessmentId + " not present");
     }
 
     List<Long> challengeIds =
@@ -277,14 +338,7 @@ public class AssessmentService {
     for (Challenge challenge : challenges) {
       final String answer = challenge.getAnswer();
       final Long id = challenge.getId();
-      boolean isCorrectAnswer =
-          challengeResponses
-              .stream()
-              .filter(req -> id.equals(req.getId()))
-              .anyMatch(req -> answer.equals(req.getAnswer()));
-      if (isCorrectAnswer) {
-        totalCorrectAnswers += 1;
-      }
+      totalCorrectAnswers += getAnswerCount(challengeResponses, answer, id);
     }
 
     Set<AstChallengeReltn> astChallengeReltns =
@@ -294,10 +348,28 @@ public class AssessmentService {
     float passPercentage = (totalCorrectAnswers * 100) / totalQuestions;
     UserAstReltn userAstReltn = userAstReltnRepository.findByUserAstReltn(keyCloakId, assessmentId);
     userAstReltn.setStatus(AssessmentStatus.FAILED);
-    if (passPercentage > 65.00f) {
+
+    AssessmentDifficulty difficulty = byAssessmentId.get().getDifficulty();
+    evaluateStatus(passPercentage, userAstReltn, difficulty);
+    userAstReltnRepository.save(userAstReltn);
+  }
+
+  private void evaluateStatus(
+      float passPercentage, UserAstReltn userAstReltn, AssessmentDifficulty difficulty) {
+    if (passPercentage > 65.00f && AssessmentDifficulty.BEGINNER == difficulty) {
+      userAstReltn.setStatus(AssessmentStatus.COMPLETED);
+    } else if (passPercentage > 85.00f && AssessmentDifficulty.INTERMEDIATE == difficulty) {
       userAstReltn.setStatus(AssessmentStatus.COMPLETED);
     }
-    userAstReltnRepository.save(userAstReltn);
+  }
+
+  private long getAnswerCount(
+      Collection<SubmitChallengeRequest> challengeResponses, String answer, Long id) {
+    return challengeResponses
+        .stream()
+        .filter(req -> id.equals(req.getId()))
+        .filter(req -> req.getAnswer().contains(answer))
+        .count();
   }
 
   /**
@@ -318,54 +390,42 @@ public class AssessmentService {
     List<UserProfile> allUsersByEmail =
         userProfileRepository.findAllByEmail(candidateEmails.stream().toArray(s -> new String[s]));
     if (allUsersByEmail == null || allUsersByEmail.isEmpty()) {
-      throw new IllegalArgumentException("Invalid Assignee Emails :No Users found");
+      throw new InvalidDataException("Invalid Assignee Emails :No Users found");
     }
-
     List<String> candidateIds =
         allUsersByEmail.stream().map(UserProfile::getKeyCloakId).collect(Collectors.toList());
-
     String[] skills = title.split(",");
     Long relatedJobId = request.getRelatedJobId();
-
     for (String skill : skills) {
       AssessmentDifficulty difficulty = request.getDifficulty();
       Optional<Assessment> existingHrAssessment =
           assessmentRepository.findByUserTitleDifficulty(
               hrId, skill.toUpperCase().trim(), difficulty.name());
-
       if (existingHrAssessment.isPresent()) {
         assignExistingAssessment(candidateIds, existingHrAssessment.get());
       } else {
         createFreshAssessment(request, candidateIds, skill);
       }
-
       createUsersJobReltn(candidateIds, relatedJobId);
     }
-
     return true;
   }
 
+  @SneakyThrows
   private void createFreshAssessment(
       AssessmentRequest request, List<String> candidateIds, String skill) {
     final AssessmentDifficulty difficulty = request.getDifficulty();
     final String hrId = request.getAssignedBy();
-
+    String upperCaseSkill = skill.toUpperCase().trim();
     // Get 15 challenges randomly
     final Set<Challenge> challenges =
-        challengeRepository.findBySkill(skill.toUpperCase().trim(), difficulty.name());
-
+        challengeRepository.findBySkill(upperCaseSkill, difficulty.name());
     if (challenges.isEmpty()) {
       log.info("Requesting Challenge Store for : {}", skill);
-      KafkaSkillsRequest kafkaSkillsRequest = new KafkaSkillsRequest();
-      kafkaSkillsRequest.setSkills(Set.of(skill));
-      kafkaSkillsRequest.setAssessmentRequest(request);
+      evaluateWorkQueue(candidateIds, hrId, upperCaseSkill);
+      KafkaSkillsRequest kafkaSkillsRequest = helper.getKafkaSkillsRequest(request, skill);
       // send to open ai processor and generate questions async
-      try {
-        kafka.sendMessage(mapper.writeValueAsString(kafkaSkillsRequest));
-      } catch (JsonProcessingException e) {
-        log.info("Failed processing the User Profile for Kafka Streaming");
-        throw new RuntimeException(e);
-      }
+      kafka.sendMessage(mapper.writeValueAsString(kafkaSkillsRequest));
       return;
     }
 
@@ -378,22 +438,37 @@ public class AssessmentService {
     freshAssessment.setType(AssessmentType.OBJECTIVE);
     assessmentRepository.save(freshAssessment);
 
-    createAstChallengeReltn(challenges, freshAssessment);
-    createUserAstReltn(candidateIds, hrId, freshAssessment);
+    createAstChallengeReltns(challenges, freshAssessment);
+    createUsersAstReltn(candidateIds, hrId, freshAssessment);
   }
 
-  private void createAstChallengeReltn(Set<Challenge> challenges, Assessment freshAssessment) {
+  private void evaluateWorkQueue(List<String> candidateIds, String hrId, String upperCaseSkill) {
+    for (String id : candidateIds) {
+      final WorkQueue queueItem = workQueueRepository.findByHrCreated(id, hrId);
+      if (queueItem == null) {
+        workQueueRepository.save(helper.getHrWorkQueue(id, hrId, Set.of(upperCaseSkill)));
+      } else {
+        String skills = queueItem.getSkills();
+        if (skills != null && !skills.contains(upperCaseSkill)) {
+          queueItem.setSkills(String.join(",", upperCaseSkill, skills));
+          workQueueRepository.save(queueItem);
+        }
+      }
+    }
+  }
+
+  private void createAstChallengeReltns(Set<Challenge> challenges, Assessment freshAssessment) {
     List<AstChallengeReltn> astChallengeReltnList = new ArrayList<>(challenges.size());
     for (Challenge challenge : challenges) {
-      AstChallengeReltn astChallengeReltn = new AstChallengeReltn();
-      astChallengeReltn.setAssessmentId(freshAssessment.getId());
-      astChallengeReltn.setChallengeId(challenge.getId());
+      AstChallengeReltn astChallengeReltn =
+          helper.createAstChallengeReltn(freshAssessment, challenge);
       astChallengeReltnList.add(astChallengeReltn);
     }
     astChallengeReltnRepository.saveAll(astChallengeReltnList);
   }
 
-  private void createUserAstReltn(
+  @Transactional
+  private void createUsersAstReltn(
       List<String> candidateIds, String hrId, Assessment freshAssessment) {
     final List<UserAstReltn> userAstReltns =
         candidateIds
@@ -412,7 +487,7 @@ public class AssessmentService {
             .stream()
             .filter(
                 candidateId -> userObReltnRepository.findByRelatedJobId(candidateId, jobId) == null)
-            .map(candidateId -> createUserObReltn(candidateId, jobId))
+            .map(candidateId -> helper.createUserObReltn(candidateId, jobId))
             .collect(Collectors.toList());
     if (!userObReltns.isEmpty()) {
       userObReltnRepository.saveAll(userObReltns);
@@ -420,23 +495,7 @@ public class AssessmentService {
   }
 
   /**
-   * Creates a user job relation entity.
-   *
-   * @param candidateId the candidate id
-   * @param jobId the job id
-   * @return the {@link UserObReltn}
-   */
-  private UserObReltn createUserObReltn(String candidateId, Long jobId) {
-    UserObReltn userObReltn = new UserObReltn();
-    userObReltn.setUserObReltn(UserObReltnType.CANDIDATE);
-    userObReltn.setHiringStatus(HiringStatus.IN_PROGRESS);
-    userObReltn.setUserId(candidateId);
-    userObReltn.setJobId(jobId);
-    return userObReltn;
-  }
-
-  /**
-   * ASsigns existing assessments to the users.
+   * Assigns existing assessments to the users.
    *
    * @param candidateIds the array of candidates.
    * @param hrAssessment the assessment created by hr.

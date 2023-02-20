@@ -59,12 +59,12 @@ public class KafkaConsumer {
     try {
       coreService.evaluateUserAssessments(profile);
     } catch (Exception ex) {
-      log.info("Failed processing the Kafka Message for User Assessment");
+      log.info("Failed processing the Kafka Message from Inquisitve for User Assessment");
     }
   }
 
   /**
-   * Listener for receiving messages from Kafka Topic from Inquisitve
+   * Listener for receiving messages from Kafka Topic from Open AI
    *
    * @param message the message
    * @throws JsonProcessingException on failing to read.
@@ -80,7 +80,7 @@ public class KafkaConsumer {
     try {
       service.createAssessment(request.getAssessmentRequest());
     } catch (Exception ex) {
-      log.info("Failed processing the Kafka Message for User Assessment");
+      log.info("Failed processing the Kafka Message from OAIP processor for HR-User Assessment");
     }
   }
 }

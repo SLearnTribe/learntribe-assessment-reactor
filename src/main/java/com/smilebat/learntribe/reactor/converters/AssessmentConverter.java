@@ -34,7 +34,9 @@ public final class AssessmentConverter {
     response.setProgress(assessment.getProgress());
     response.setNumOfQuestions(assessment.getQuestions());
     response.setDescription(assessment.getDescription());
-    response.setStatus(assessment.getStatus());
+    if (assessment.getStatus() != null) {
+      response.setStatus(assessment.getStatus().name());
+    }
 
     AssessmentDifficulty difficulty = assessment.getDifficulty();
     if (difficulty != null) {

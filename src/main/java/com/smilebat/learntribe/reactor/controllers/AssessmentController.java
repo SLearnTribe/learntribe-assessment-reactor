@@ -3,7 +3,9 @@ package com.smilebat.learntribe.reactor.controllers;
 import com.smilebat.learntribe.assessment.AssessmentRequest;
 import com.smilebat.learntribe.assessment.SubmitAssessmentRequest;
 import com.smilebat.learntribe.assessment.response.AssessmentResponse;
+import com.smilebat.learntribe.learntribevalidator.learntribeexceptions.BeanValidationException;
 import com.smilebat.learntribe.reactor.services.AssessmentService;
+import io.swagger.annotations.ApiImplicitParam;
 import io.swagger.annotations.ApiOperation;
 import io.swagger.annotations.ApiResponse;
 import io.swagger.annotations.ApiResponses;
@@ -87,7 +89,7 @@ public class AssessmentController {
       throws InterruptedException {
 
     if (pageNo <= 0) {
-      return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Invalid Page Number");
+      throw new BeanValidationException("Page number must be > 0");
     }
 
     Pageable paging = PageRequest.of(pageNo - 1, pageSize);
@@ -214,6 +216,14 @@ public class AssessmentController {
         @ApiResponse(code = 404, message = URL_NOT_FOUND),
         @ApiResponse(code = 422, message = INVALID_DATA),
       })
+  @ApiImplicitParam(
+      name = "Authorization",
+      value = "Access Token",
+      required = true,
+      allowEmptyValue = false,
+      paramType = "header",
+      dataTypeClass = String.class,
+      example = "Bearer access_token")
   public ResponseEntity<?> submitAssessment(
       @AuthenticationPrincipal(expression = SUBJECT) String keyCloakId,
       @PathVariable(value = "assessmentId") Long assessmentId,
