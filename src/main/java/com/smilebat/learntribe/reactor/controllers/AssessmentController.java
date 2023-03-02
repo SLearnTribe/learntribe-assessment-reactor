@@ -3,6 +3,7 @@ package com.smilebat.learntribe.reactor.controllers;
 import com.smilebat.learntribe.assessment.AssessmentRequest;
 import com.smilebat.learntribe.assessment.SubmitAssessmentRequest;
 import com.smilebat.learntribe.assessment.response.AssessmentResponse;
+import com.smilebat.learntribe.assessment.response.SubmitAssessmentResponse;
 import com.smilebat.learntribe.learntribevalidator.learntribeexceptions.BeanValidationException;
 import com.smilebat.learntribe.reactor.services.AssessmentService;
 import io.swagger.annotations.ApiImplicitParam;
@@ -167,7 +168,8 @@ public class AssessmentController {
   /**
    * Retrieves the assessment based on assessment id
    *
-   * @param assessmentId the assessment id
+   * @param assessmentId the assessment id.
+   * @param keyCloakId the IAM id.
    * @return {@link ResponseEntity} of {@link AssessmentResponse}
    */
   @GetMapping(value = "/id/{assessmentId}")
@@ -188,9 +190,10 @@ public class AssessmentController {
         @ApiResponse(code = 422, message = INVALID_DATA),
       })
   public ResponseEntity<AssessmentResponse> retrieveAssessment(
+      @AuthenticationPrincipal(expression = SUBJECT) String keyCloakId,
       @PathVariable(value = "assessmentId") Long assessmentId) {
 
-    AssessmentResponse response = assessmentService.retrieveAssessment(assessmentId);
+    AssessmentResponse response = assessmentService.retrieveAssessment(keyCloakId, assessmentId);
     return ResponseEntity.ok(response);
   }
 
@@ -230,8 +233,8 @@ public class AssessmentController {
       @Valid @RequestBody SubmitAssessmentRequest request) {
     request.setId(assessmentId);
     request.setKeyCloakId(keyCloakId);
-    assessmentService.submitAssessment(request);
-    return ResponseEntity.status(HttpStatus.OK).build();
+    final SubmitAssessmentResponse response = assessmentService.submitAssessment(request);
+    return ResponseEntity.status(HttpStatus.OK).body(response);
   }
 
   /**

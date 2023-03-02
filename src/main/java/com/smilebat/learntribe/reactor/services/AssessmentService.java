@@ -8,6 +8,7 @@ import com.smilebat.learntribe.assessment.SubmitAssessmentRequest;
 import com.smilebat.learntribe.assessment.SubmitChallengeRequest;
 import com.smilebat.learntribe.assessment.response.AssessmentResponse;
 import com.smilebat.learntribe.assessment.response.ChallengeResponse;
+import com.smilebat.learntribe.assessment.response.SubmitAssessmentResponse;
 import com.smilebat.learntribe.dataaccess.AssessmentRepository;
 import com.smilebat.learntribe.dataaccess.AssessmentSearchRepository;
 import com.smilebat.learntribe.dataaccess.AstChallengeReltnRepository;
@@ -52,6 +53,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.Setter;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
+import org.jetbrains.annotations.NotNull;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
@@ -150,9 +152,9 @@ public class AssessmentService {
     }
 
     final String candidateId = candidateProfile.getKeyCloakId();
-    final UserAstReltn userAstReltnForCandidate =
-        helper.createUserAstReltnForCandidate(candidateId, assessment.get());
-    userAstReltnRepository.save(userAstReltnForCandidate);
+    final UserAstReltn userAstReltn =
+        UserAstReltn.create(candidateId, assessment.get(), UserAstReltn::applyReltnForCandidate);
+    userAstReltnRepository.save(userAstReltn);
     return true;
   }
 
@@ -177,6 +179,15 @@ public class AssessmentService {
     String[] filters = evaluateAssessmentStatusFilters(request);
     List<UserAstReltn> userAstReltns =
         getUserAssessmentRelations(keyword, keyCloakId, paging, filters);
+
+    /* If user assessment status is in progress move it to blocked*/
+    userAstReltns
+        .stream()
+        .filter(reltn -> AssessmentStatus.IN_PROGRESS == reltn.getStatus())
+        .forEach(reltn -> reltn.setStatus(AssessmentStatus.BLOCKED));
+
+    userAstReltnRepository.saveAll(userAstReltns);
+
     List<Assessment> assessments = fetchExisitingAssessments(userAstReltns);
     List<AssessmentResponse> responses = assessmentConverter.toResponse(assessments);
     mapBusinessName(responses);
@@ -224,9 +235,9 @@ public class AssessmentService {
         assessment.setQuestions(challenges.size());
         assessmentRepository.save(assessment);
         createAstChallengeReltns(challenges, assessment);
-        final UserAstReltn userAstReltnForCandidate =
-            helper.createUserAstReltnForCandidate(candidateId, assessment);
-        userAstReltnRepository.save(userAstReltnForCandidate);
+        final UserAstReltn userAstReltn =
+            UserAstReltn.create(candidateId, assessment, UserAstReltn::applyReltnForCandidate);
+        userAstReltnRepository.save(userAstReltn);
         log.info("Successfully created new assessment for the user from work item");
         workQueueRepository.delete(queueItem);
       }
@@ -280,16 +291,18 @@ public class AssessmentService {
    * Retrieves assessment with challenges.
    *
    * @param assessmentId the Assessment id.
+   * @param keycloakId the IAM id.
    * @return AssessmentResponse the {@link AssessmentResponse}.
    */
   @Transactional
-  public AssessmentResponse retrieveAssessment(Long assessmentId) {
+  public AssessmentResponse retrieveAssessment(String keycloakId, Long assessmentId) {
     Verify.verifyNotNull(assessmentId, "Assessment ID cannnot be null");
+    Verify.verifyNotNull(keycloakId, "Keycloak ID cannnot be null");
     log.info("Fetching Assessments with id {}", assessmentId);
     Assessment assessment = assessmentRepository.findByAssessmentId(assessmentId);
     if (assessment == null) {
       log.info("No Assessment found");
-      return new AssessmentResponse();
+      throw new InvalidDataException("Assessment " + assessmentId + " not found");
     }
     final Set<AstChallengeReltn> astChallengeReltns =
         astChallengeReltnRepository.findByAssessmentId(assessmentId);
@@ -298,13 +311,23 @@ public class AssessmentService {
             .stream()
             .map(AstChallengeReltn::getChallengeId)
             .collect(Collectors.toSet());
+
+    /*Move Assessment status to in progress*/
+    UserAstReltn userAstReltn = userAstReltnRepository.findByUserAstReltn(keycloakId, assessmentId);
+    if (AssessmentStatus.BLOCKED != userAstReltn.getStatus()) {
+      userAstReltn.setStatus(AssessmentStatus.IN_PROGRESS);
+      userAstReltnRepository.save(userAstReltn);
+    }
+
     final List<Challenge> challenges = challengeRepository.findAllById(challengeIds);
     AssessmentResponse assessmentResponse = assessmentConverter.toResponse(assessment);
     List<ChallengeResponse> challengeResponses = challengeConverter.toResponse(challenges);
     if (challengeResponses != null && !challengeResponses.isEmpty()) {
       assessmentResponse.setChallengeResponses(challengeResponses);
+      assessmentResponse.setNumOfQuestions(challengeResponses.size());
     }
-    assessmentResponse.setRequiredTimeInSeconds(challenges.size() * 60);
+
+    assessmentResponse.setReqTimeInMillis((long) challenges.size() * 60 * 1000);
     return assessmentResponse;
   }
 
@@ -312,9 +335,10 @@ public class AssessmentService {
    * Submits the user assessment.
    *
    * @param request the {@link SubmitAssessmentRequest}.
+   * @return SubmitAssessmentResponse.
    */
   @Transactional
-  public void submitAssessment(SubmitAssessmentRequest request) {
+  public SubmitAssessmentResponse submitAssessment(SubmitAssessmentRequest request) {
     Verify.verifyNotNull(request, "Request cannot be null");
     final Long assessmentId = request.getId();
     Verify.verifyNotNull(assessmentId, "Assessment Id cannot be null");
@@ -333,31 +357,61 @@ public class AssessmentService {
 
     final List<Challenge> challenges = challengeRepository.findAllById(challengeIds);
 
-    float totalCorrectAnswers = 0;
+    int totalCorrectAnswers = 0;
+    totalCorrectAnswers = getTotalCorrectAnswers(challengeResponses, challenges);
+
+    UserAstReltn userAstReltn = evaluateUsrAstReltn(assessmentId, keyCloakId);
+
+    Set<AstChallengeReltn> astChallengeReltns =
+        astChallengeReltnRepository.findByAssessmentId(assessmentId);
+
+    int totalQuestions = astChallengeReltns.size();
+    userAstReltn.setStatus(AssessmentStatus.FAILED);
+    userAstReltn.setAnswered(totalCorrectAnswers);
+    userAstReltn.setQuestions(totalQuestions);
+
+    AssessmentDifficulty difficulty = byAssessmentId.get().getDifficulty();
+    evaluateStatus(userAstReltn, difficulty);
+    userAstReltnRepository.save(userAstReltn);
+
+    return getSubmitAssessmentResponse(challengeResponses, totalQuestions);
+  }
+
+  private int getTotalCorrectAnswers(
+      Collection<SubmitChallengeRequest> challengeResponses, Collection<Challenge> challenges) {
+    int totalCorrectAnswers = 0;
     for (Challenge challenge : challenges) {
       final String answer = challenge.getAnswer();
       final Long id = challenge.getId();
       totalCorrectAnswers += getAnswerCount(challengeResponses, answer, id);
     }
-
-    Set<AstChallengeReltn> astChallengeReltns =
-        astChallengeReltnRepository.findByAssessmentId(assessmentId);
-    float totalQuestions = astChallengeReltns.size();
-
-    float passPercentage = (totalCorrectAnswers * 100) / totalQuestions;
-    UserAstReltn userAstReltn = userAstReltnRepository.findByUserAstReltn(keyCloakId, assessmentId);
-    userAstReltn.setStatus(AssessmentStatus.FAILED);
-
-    AssessmentDifficulty difficulty = byAssessmentId.get().getDifficulty();
-    evaluateStatus(passPercentage, userAstReltn, difficulty);
-    userAstReltnRepository.save(userAstReltn);
+    return totalCorrectAnswers;
   }
 
-  private void evaluateStatus(
-      float passPercentage, UserAstReltn userAstReltn, AssessmentDifficulty difficulty) {
-    if (passPercentage > 65.00f && AssessmentDifficulty.BEGINNER == difficulty) {
+  @NotNull
+  private UserAstReltn evaluateUsrAstReltn(Long assessmentId, String keyCloakId) {
+    UserAstReltn userAstReltn = userAstReltnRepository.findByUserAstReltn(keyCloakId, assessmentId);
+    if (AssessmentStatus.BLOCKED == userAstReltn.getStatus()) {
+      throw new InvalidDataException(
+          "Assessment " + assessmentId + " is Temporarily Blocked for the User");
+    }
+    return userAstReltn;
+  }
+
+  @NotNull
+  private SubmitAssessmentResponse getSubmitAssessmentResponse(
+      Collection<SubmitChallengeRequest> challengeResponses, int totalQuestions) {
+    SubmitAssessmentResponse response = new SubmitAssessmentResponse();
+    response.setTotalQuestions(totalQuestions);
+    response.setTotalAnswered(challengeResponses.size());
+    return response;
+  }
+
+  private void evaluateStatus(UserAstReltn userAstReltn, AssessmentDifficulty difficulty) {
+    final int passPercentage = (userAstReltn.getAnswered() * 100) / userAstReltn.getQuestions();
+    if (passPercentage > 59 && AssessmentDifficulty.BEGINNER == difficulty) {
       userAstReltn.setStatus(AssessmentStatus.COMPLETED);
-    } else if (passPercentage > 85.00f && AssessmentDifficulty.INTERMEDIATE == difficulty) {
+    } else if (passPercentage > 64 && AssessmentDifficulty.INTERMEDIATE == difficulty) {
       userAstReltn.setStatus(AssessmentStatus.COMPLETED);
     }
   }
@@ -367,7 +421,8 @@ public class AssessmentService {
     return challengeResponses
         .stream()
         .filter(req -> id.equals(req.getId()))
-        .filter(req -> req.getAnswer().contains(answer))
+        .filter(req -> req.getAnswer() != null)
+        .filter(req -> answer.contains(req.getAnswer()))
         .count();
   }
 
@@ -435,6 +490,7 @@ public class AssessmentService {
     freshAssessment.setTitle(skill.toUpperCase().trim());
     freshAssessment.setDifficulty(difficulty);
     freshAssessment.setType(AssessmentType.OBJECTIVE);
+    freshAssessment.setQuestions(challenges.size());
     assessmentRepository.save(freshAssessment);
 
     createAstChallengeReltns(challenges, freshAssessment);
@@ -472,9 +528,13 @@ public class AssessmentService {
     final List<UserAstReltn> userAstReltns =
         candidateIds
             .stream()
-            .map(candidateId -> helper.createUserAstReltnForCandidate(candidateId, freshAssessment))
+            .map(
+                candidateId ->
+                    UserAstReltn.create(
+                        candidateId, freshAssessment, UserAstReltn::applyReltnForCandidate))
             .collect(Collectors.toList());
-    UserAstReltn userAstReltnForHr = helper.createUserAstReltnForHr(hrId, freshAssessment);
+    UserAstReltn userAstReltnForHr =
+        UserAstReltn.create(hrId, freshAssessment, UserAstReltn::applyReltnForHr);
     userAstReltns.add(userAstReltnForHr);
     userAstReltnRepository.saveAll(userAstReltns);
   }
@@ -517,7 +577,7 @@ public class AssessmentService {
               .anyMatch(userAstReltn -> candidateId.equals(userAstReltn.getUserId()));
       if (!isAssigned) {
         UserAstReltn userAstReltnForCandidate =
-            helper.createUserAstReltnForCandidate(candidateId, hrAssessment);
+            UserAstReltn.create(candidateId, hrAssessment, UserAstReltn::applyReltnForCandidate);
         userAstReltnCandidateList.add(userAstReltnForCandidate);
       }
     }
