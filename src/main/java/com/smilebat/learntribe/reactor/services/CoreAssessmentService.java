@@ -189,9 +189,13 @@ public class CoreAssessmentService {
     final List<UserAstReltn> userAstReltns =
         candidateIds
             .stream()
-            .map(candidateId -> helper.createUserAstReltnForCandidate(candidateId, assessment))
+            .map(
+                candidateId ->
+                    UserAstReltn.create(
+                        candidateId, assessment, UserAstReltn::applyReltnForCandidate))
             .collect(Collectors.toList());
-    UserAstReltn userAstReltnForHr = helper.createUserAstReltnForHr(hrId, assessment);
+    UserAstReltn userAstReltnForHr =
+        UserAstReltn.create(hrId, assessment, UserAstReltn::applyReltnForHr);
     userAstReltns.add(userAstReltnForHr);
     userAstReltnRepository.saveAll(userAstReltns);
   }
