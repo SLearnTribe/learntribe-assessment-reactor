@@ -366,7 +366,7 @@ public class AssessmentService {
         astChallengeReltnRepository.findByAssessmentId(assessmentId);
 
     int totalQuestions = astChallengeReltns.size();
-    userAstReltn.setStatus(AssessmentStatus.FAILED);
+    userAstReltn.setStatus(AssessmentStatus.BLOCKED);
     userAstReltn.setAnswered(totalCorrectAnswers);
     userAstReltn.setQuestions(totalQuestions);
 
