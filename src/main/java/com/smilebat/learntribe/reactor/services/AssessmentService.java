@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Verify;
 import com.google.common.collect.ImmutableList;
 import com.smilebat.learntribe.assessment.AssessmentRequest;
+import com.smilebat.learntribe.assessment.ProcRequest;
 import com.smilebat.learntribe.assessment.SubmitAssessmentRequest;
 import com.smilebat.learntribe.assessment.SubmitChallengeRequest;
 import com.smilebat.learntribe.assessment.response.AssessmentResponse;
@@ -344,6 +345,7 @@ public class AssessmentService {
     Verify.verifyNotNull(assessmentId, "Assessment Id cannot be null");
     List<SubmitChallengeRequest> challengeResponses = request.getChallengeResponses();
     Verify.verifyNotNull(challengeResponses, "Challenges cannot be null");
+
     final String keyCloakId = request.getKeyCloakId();
     final Optional<Assessment> byAssessmentId = assessmentRepository.findById(assessmentId);
 
@@ -371,9 +373,15 @@ public class AssessmentService {
     userAstReltn.setQuestions(totalQuestions);
 
     AssessmentDifficulty difficulty = byAssessmentId.get().getDifficulty();
-    evaluateStatus(userAstReltn, difficulty);
-    userAstReltnRepository.save(userAstReltn);
 
+    ProcRequest procRequest = request.getProcResponse();
+    final int procPercentage = procRequest.getTotal() * (procRequest.getGood() / 100);
+    log.info("Procotring evaluation for User is {}", procPercentage);
+    if (procPercentage > 25) {
+      evaluateStatus(userAstReltn, difficulty);
+    }
+
+    userAstReltnRepository.save(userAstReltn);
     return getSubmitAssessmentResponse(challengeResponses, totalQuestions);
   }
 
