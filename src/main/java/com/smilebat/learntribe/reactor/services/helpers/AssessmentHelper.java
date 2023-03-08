@@ -11,6 +11,7 @@ import com.smilebat.learntribe.enums.HiringStatus;
 import com.smilebat.learntribe.enums.QueueStatus;
 import com.smilebat.learntribe.enums.UserObReltnType;
 import com.smilebat.learntribe.kafka.KafkaSkillsRequest;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.util.Collection;
 import java.util.List;
 import java.util.Set;
@@ -25,7 +26,7 @@ import org.springframework.stereotype.Component;
  * @author Pai,Sai Nandan
  */
 @Component
-@SuppressWarnings(value = "CE_CLASS_ENVY")
+@SuppressFBWarnings(justification = "Helper code needs to be refactored")
 public class AssessmentHelper {
 
   private Assessment createSystemAssessment(String skill, AssessmentDifficulty difficulty) {
@@ -129,37 +130,19 @@ public class AssessmentHelper {
    * Creates a work queue item.
    *
    * @param candidateId the IAM id of candidate.
-   * @param hrId the IAM id of hr.
+   * @param request the {@link AssessmentRequest} of hr.
    * @param skills the Set of Skills.
    * @return the {@link WorkQueue}.
    */
-  public WorkQueue getHrWorkQueue(String candidateId, String hrId, Set<String> skills) {
+  public WorkQueue getHrWorkQueue(
+      String candidateId, AssessmentRequest request, Set<String> skills) {
     WorkQueue queue = new WorkQueue();
     queue.setCreatedFor(candidateId);
-    queue.setCreatedBy(hrId);
+    queue.setCreatedBy(request.getAssignedBy());
     queue.setSkills(String.join(",", skills));
     queue.setStatus(QueueStatus.PENDING);
     queue.setDifficulty(AssessmentDifficulty.BEGINNER);
+    queue.setRelatedJobId(request.getRelatedJobId());
     return queue;
   }
-
-  //  /**
-  //   * Creates assessment for based on work queue.
-  //   *
-  //   * @param queueItem the {@link WorkQueue}
-  //   * @param skill the skill
-  //   * @param challenges the set of {@link Challenge}
-  //   * @return the {@link Assessment}.
-  //   */
-  //  public Assessment createAssessmentForWorkQueue(
-  //      WorkQueue queueItem, String skill, Set<Challenge> challenges) {
-  //    Assessment assessment = new Assessment();
-  //    assessment.setDifficulty(queueItem.getDifficulty());
-  //    assessment.setCreatedBy(queueItem.getCreatedBy());
-  //    assessment.setStatus(AssessmentStatus.PENDING);
-  //    assessment.setTitle(skill);
-  //    assessment.setType(AssessmentType.OBJECTIVE);
-  //    assessment.setQuestions(challenges.size());
-  //    return assessment;
-  //  }
 }
