@@ -15,9 +15,15 @@ spring:
         dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: true
         search:
-          default:
-            directory_provider: filesystem
-            indexBase: /data/index/default
+          backend:
+            analysis:
+              configurer: com.smilebat.learntribe.dataaccess.config.CustomLuceneAnalysisConfigurer
+            protocol: http
+            directory:
+              root: /data/index/default
+#          default:
+#            directory_provider: filesystem
+#            indexBase: /data/index/default
     show-sql: true
   security:
     oauth2:
