@@ -216,33 +216,39 @@ public class AssessmentService {
     }
     String[] parsedSkills = skills.split(",");
     for (String skill : parsedSkills) {
-      final Optional<Assessment> byUserTitleDifficulty =
-          assessmentRepository.findByUserTitleDifficulty(
-              candidateId, skill, queueItem.getDifficulty().name());
-      if (byUserTitleDifficulty.isPresent()) {
-        log.info("Assessment already present for the user from queue");
-        workQueueRepository.delete(queueItem);
-        return;
-      }
-      final Set<Challenge> challenges =
-          challengeRepository.findBySkill(skill, queueItem.getDifficulty().name());
-      if (challenges.size() > 10) {
-        Assessment assessment = new Assessment();
-        assessment.setDifficulty(queueItem.getDifficulty());
-        assessment.setCreatedBy(queueItem.getCreatedBy());
-        assessment.setStatus(AssessmentStatus.PENDING);
-        assessment.setTitle(skill);
-        assessment.setType(AssessmentType.OBJECTIVE);
-        assessment.setQuestions(challenges.size());
-        assessmentRepository.save(assessment);
-        createAstChallengeReltns(challenges, assessment);
-        final UserAstReltn userAstReltn =
-            UserAstReltn.create(candidateId, assessment, UserAstReltn::applyReltnForCandidate);
-        userAstReltnRepository.save(userAstReltn);
-        log.info("Successfully created new assessment for the user from work item");
-        workQueueRepository.delete(queueItem);
-      }
+      if (extracted(queueItem, candidateId, skill)) return;
     }
+  }
+
+  private boolean extracted(WorkQueue queueItem, String candidateId, String skill) {
+    final Optional<Assessment> byUserTitleDifficulty =
+        assessmentRepository.findByUserTitleDifficulty(
+            candidateId, skill, queueItem.getDifficulty().name());
+    if (byUserTitleDifficulty.isPresent()) {
+      log.info("Assessment already present for the user from queue");
+      workQueueRepository.delete(queueItem);
+      return true;
+    }
+    final Set<Challenge> challenges =
+        challengeRepository.findBySkill(skill, queueItem.getDifficulty().name());
+    if (challenges.size() > 10) {
+      Assessment assessment = new Assessment();
+      assessment.setDifficulty(queueItem.getDifficulty());
+      assessment.setCreatedBy(queueItem.getCreatedBy());
+      assessment.setRelatedJobId(queueItem.getRelatedJobId());
+      assessment.setStatus(AssessmentStatus.PENDING);
+      assessment.setTitle(skill);
+      assessment.setType(AssessmentType.OBJECTIVE);
+      assessment.setQuestions(challenges.size());
+      assessmentRepository.save(assessment);
+      createAstChallengeReltns(challenges, assessment);
+      final UserAstReltn userAstReltn =
+          UserAstReltn.create(candidateId, assessment, UserAstReltn::applyReltnForCandidate);
+      userAstReltnRepository.save(userAstReltn);
+      log.info("Successfully created new assessment for the user from work item");
+      workQueueRepository.delete(queueItem);
+    }
+    return false;
   }
 
   private List<UserAstReltn> getUserAssessmentRelations(
@@ -478,13 +484,14 @@ public class AssessmentService {
       AssessmentRequest request, List<String> candidateIds, String skill) {
     final AssessmentDifficulty difficulty = request.getDifficulty();
     final String hrId = request.getAssignedBy();
+    final Long relatedJobId = request.getRelatedJobId();
     String upperCaseSkill = skill.toUpperCase().trim();
     // Get 15 challenges randomly
     final Set<Challenge> challenges =
         challengeRepository.findBySkill(upperCaseSkill, difficulty.name());
     if (challenges.isEmpty()) {
       log.info("Requesting Challenge Store for : {}", skill);
-      evaluateWorkQueue(candidateIds, hrId, upperCaseSkill);
+      evaluateWorkQueue(candidateIds, upperCaseSkill, request);
       KafkaSkillsRequest kafkaSkillsRequest = helper.getKafkaSkillsRequest(request, skill);
       // send to open ai processor and generate questions async
       kafka.sendMessage(mapper.writeValueAsString(kafkaSkillsRequest));
@@ -494,7 +501,7 @@ public class AssessmentService {
     log.info("Creating fresh Assessment : Initiated By {}", hrId);
     Assessment freshAssessment = new Assessment();
     freshAssessment.setCreatedBy(hrId);
-    freshAssessment.setRelatedJobId(request.getRelatedJobId());
+    freshAssessment.setRelatedJobId(relatedJobId);
     freshAssessment.setTitle(skill.toUpperCase().trim());
     freshAssessment.setDifficulty(difficulty);
     freshAssessment.setType(AssessmentType.OBJECTIVE);
@@ -505,11 +512,12 @@ public class AssessmentService {
     createUsersAstReltn(candidateIds, hrId, freshAssessment);
   }
 
-  private void evaluateWorkQueue(List<String> candidateIds, String hrId, String upperCaseSkill) {
+  private void evaluateWorkQueue(
+      List<String> candidateIds, String upperCaseSkill, AssessmentRequest request) {
     for (String id : candidateIds) {
-      final WorkQueue queueItem = workQueueRepository.findByHrCreated(id, hrId);
+      final WorkQueue queueItem = workQueueRepository.findByHrCreated(id, request.getAssignedBy());
       if (queueItem == null) {
-        workQueueRepository.save(helper.getHrWorkQueue(id, hrId, Set.of(upperCaseSkill)));
+        workQueueRepository.save(helper.getHrWorkQueue(id, request, Set.of(upperCaseSkill)));
       } else {
         String skills = queueItem.getSkills();
         if (skills != null && !skills.contains(upperCaseSkill)) {

@@ -17,8 +17,8 @@
 		<java.version>11</java.version>
 		<jackson.version>2.5.2</jackson.version>
 		<maven-compiler-plugin.version>3.10.1</maven-compiler-plugin.version>
-		<model.version>1.1.10-SNAPSHOT</model.version>
-		<commons.version>1.1.8-SNAPSHOT</commons.version>
+		<model.version>1.1.11-SNAPSHOT</model.version>
+		<commons.version>1.1.9-SNAPSHOT</commons.version>
 		<docker.registry.url>registry.hub.docker.com/smilebat96/learntribe-assessment-reactor</docker.registry.url>
 		<scm.developer.connection>scm:git:https://github.com/SLearnTribe/learntribe-assessment-reactor.git</scm.developer.connection>
 		<scm.connection>https://github.com/SLearnTribe/learntribe-assessment-reactor</scm.connection>
